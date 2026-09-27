@@ -68,11 +68,15 @@ function fmtTime(iso){
   if(typeof iso !== "string") return "";
   const m = iso.match(/T(\d{2}):(\d{2})/);
   if(!m) return esc(iso);
-  let h = parseInt(m[1],10);
+  // Sheet's time-only cells serialize as UTC against a fixed 1899-12-30 base date
+  // (which predates DST rules), so this is consistently 5 hours ahead of the
+  // sheet's displayed Eastern time. Shift back to match what the sheet shows.
+  let h = parseInt(m[1],10) - 5;
+  if(h < 0) h += 24;
   const min = m[2];
   const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12; if(h === 0) h = 12;
-  return h + ":" + min + " " + ampm;
+  let h12 = h % 12; if(h12 === 0) h12 = 12;
+  return h12 + ":" + min + " " + ampm;
 }
 
 function isTimeCell(v){
