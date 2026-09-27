@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mance, PA – Train Reports</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121820; --border:#232c38; --text:#e8edf3; --muted:#8a97a6;
+    --east:#66bb6a; --west:#ffb74d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);padding:24px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  h1{font-size:1.4rem;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:.85rem;margin-bottom:16px;}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:110px;}
+  .stat .label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+  .stat .value{font-size:1.4rem;font-weight:600;}
+  .stat.east .value{color:var(--east);}
+  .stat.west .value{color:var(--west);}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);font-size:.85rem;vertical-align:top;}
+  th{background:#0e141b;color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;}
+  tr:last-child td{border-bottom:none;}
+  .dir-east{color:var(--east);font-weight:600;}
+  .dir-west{color:var(--west);font-weight:600;}
+  .err{color:#ef5350;padding:20px;background:var(--panel);border-radius:10px;border:1px solid var(--border);}
+  .updated{font-size:.75rem;color:var(--muted);margin-top:12px;}
+  .tablewrap{overflow-x:auto;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Loading…</h1>
+  <div class="sub" id="subtitle"></div>
+  <div class="stats" id="stats"></div>
+  <div class="tablewrap" id="content">Loading train log…</div>
+  <div class="updated" id="updated"></div>
+</div>
+
+<script>
+// ---- Configure this to match your deployed Apps Script Web App URL ----
+const ENDPOINT = "https://script.google.com/macros/s/AKfycbwiDHvjI2FQaPBQ19nVD1doMpOgY3aSTN5WpQlJY1JWE8jELfalkBtGubPo4qZmgWBL/exec";
+const REFRESH_MS = 60000; // how often to re-poll the sheet
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function loadData(){
+  const cbName = "cb_" + Date.now();
+  window[cbName] = function(payload){
+    render(payload);
+    delete window[cbName];
+    if(script.parentNode) script.parentNode.removeChild(script);
+  };
+  const script = document.createElement("script");
+  script.src = ENDPOINT + "?callback=" + cbName + "&_=" + Date.now();
+  script.onerror = function(){
+    document.getElementById("content").innerHTML = '<div class="err">Could not reach the train sheet. Retrying shortly…</div>';
+  };
+  document.body.appendChild(script);
+}
+
+function fmtTime(iso){
+  if(typeof iso !== "string") return "";
+  const m = iso.match(/T(\d{2}):(\d{2})/);
+  if(!m) return esc(iso);
+  let h = parseInt(m[1],10);
+  const min = m[2];
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if(h === 0) h = 12;
+  return h + ":" + min + " " + ampm;
+}
+
+function isTimeCell(v){
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v);
+}
+
+function render(payload){
+  if(!payload || payload.error){
+    document.getElementById("title").textContent = "Mance, PA – Train Reports";
+    document.getElementById("content").innerHTML = '<div class="err">' + esc(payload && payload.error ? payload.error : "No data available.") + '</div>';
+    return;
+  }
+  const rows = payload.rows || [];
+
+  // Title: first cell anywhere containing "Train Reports"
+  let title = "Mance, PA – Train Reports";
+  for(const r of rows){
+    const hit = r.find(c => typeof c === "string" && c.includes("Train Reports"));
+    if(hit){ title = hit; break; }
+  }
+  document.getElementById("title").textContent = title;
+  document.getElementById("subtitle").textContent = "Sheet: " + esc(payload.sheetName || "");
+
+  // Eastbound / Westbound counts: find the "Eastbound"/"Westbound" label row, read the row below it
+  let eastCount = null, westCount = null;
+  for(let i=0;i<rows.length-1;i++){
+    const r = rows[i];
+    const ei = r.findIndex(c => String(c).trim() === "Eastbound");
+    if(ei !== -1){
+      const wi = r.findIndex((c,idx) => idx > ei && String(c).trim() === "Westbound");
+      if(wi !== -1){
+        eastCount = rows[i+1][ei];
+        westCount = rows[i+1][wi];
+      }
+      break;
+    }
+  }
+  const statsEl = document.getElementById("stats");
+  statsEl.innerHTML = "";
+  if(eastCount !== null){
+    statsEl.innerHTML += '<div class="stat east"><div class="label">Eastbound Today</div><div class="value">'+esc(eastCount)+'</div></div>';
+    statsEl.innerHTML += '<div class="stat west"><div class="label">Westbound Today</div><div class="value">'+esc(westCount)+'</div></div>';
+  }
+
+  // Locate the log table's header row by finding the cell that reads exactly "Time"
+  let headerRowIdx = -1, timeCol = -1;
+  for(let i=0;i<rows.length;i++){
+    const idx = rows[i].findIndex(c => String(c).trim() === "Time");
+    if(idx !== -1){ headerRowIdx = i; timeCol = idx; break; }
+  }
+
+  if(headerRowIdx === -1){
+    document.getElementById("content").innerHTML = '<div class="err">Could not locate the train log table in the sheet.</div>';
+    return;
+  }
+
+  const fields = ["Time","Direction","Train Symbol","Train Description","Consist","Power Config","Track","Notes"];
+  const cols = fields.map((_,i) => timeCol + i);
+
+  // Data rows: contiguous block after the header whose Time column looks like a time value
+  const logRows = [];
+  for(let i=headerRowIdx+1;i<rows.length;i++){
+    const r = rows[i];
+    if(isTimeCell(r[timeCol])){
+      logRows.push(r);
+    } else if(logRows.length > 0){
+      break;
+    }
+  }
+
+  let html = '<table><thead><tr>';
+  fields.forEach(f => html += '<th>'+esc(f)+'</th>');
+  html += '</tr></thead><tbody>';
+
+  logRows.forEach(r => {
+    const dir = String(r[cols[1]] || "").trim();
+    const dirClass = dir === "East" ? "dir-east" : dir === "West" ? "dir-west" : "";
+    html += '<tr>';
+    html += '<td>'+fmtTime(r[cols[0]])+'</td>';
+    html += '<td class="'+dirClass+'">'+esc(dir)+'</td>';
+    html += '<td>'+esc(r[cols[2]])+'</td>';
+    html += '<td>'+esc(r[cols[3]])+'</td>';
+    html += '<td>'+esc(r[cols[4]])+'</td>';
+    html += '<td>'+esc(r[cols[5]])+'</td>';
+    html += '<td>'+esc(r[cols[6]])+'</td>';
+    html += '<td>'+esc(r[cols[7]])+'</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById("content").innerHTML = html;
+  document.getElementById("updated").textContent = "Page last refreshed: " + new Date().toLocaleTimeString();
+}
+
+loadData();
+setInterval(loadData, REFRESH_MS);
+</script>
+</body>
+</html>
